@@ -22,6 +22,7 @@ let manifest = null;
 let images = [];
 let tileSize = 0;
 let manifestLoaded = false;
+let imageBuckets = [];
 
 // ----- Determinism -----
 let seed = 1337;
@@ -34,6 +35,25 @@ const MIN_ZOOM = 0.025;
 const MAX_ZOOM = 1.0;
 const ZOOM_PER_FRAME = 1.02;
 const PAN_SPEED_DIVISOR = 32;
+const AUTO_CAMERA = true;
+const START_TILE_ZOOM = 1.0;
+const MID_ARC_ZOOM = 0.022;
+const TARGET_TILE_ZOOM = 1.0;
+const ARC_DURATION_FRAMES = 1620;
+const MAX_TARGET_TILE_DISTANCE = 8;
+const HORIZONTAL_MOVE_START_T = 0.232;
+const HORIZONTAL_MOVE_END_T = 0.785;
+const ZOOM_IN_SOFT_START_POWER = 2.0;
+
+let autoCameraReady = false;
+let currentTileI = 0;
+let currentTileJ = 0;
+let moveStartX = 0;
+let moveStartY = 0;
+let moveEndX = 0;
+let moveEndY = 0;
+let moveFrame = 0;
+let moveDuration = ARC_DURATION_FRAMES;
 
 // ----- Image cache -----
 const thumbs = [];
@@ -48,6 +68,7 @@ const MEDIUM_CAP = 80;
 // ----- HUD -----
 let lastFpsSample = 0;
 let fpsValue = 0;
+const NEARBY_SOURCE_RADIUS = 2;
 
 // ----- p5 lifecycle -----
 function setup() {
@@ -85,6 +106,8 @@ function initFromManifest(m) {
     return;
   }
 
+  buildImageBuckets();
+
   thumbs.length = images.length;
   let remaining = images.length;
   const onDone = () => {
@@ -106,10 +129,25 @@ function initFromManifest(m) {
       }
     );
   });
+
+  if (AUTO_CAMERA) initAutoCamera();
+}
+
+function posMod(n, m) {
+  return ((n % m) + m) % m;
+}
+
+function buildImageBuckets() {
+  const classCount = (NEARBY_SOURCE_RADIUS + 1) * (NEARBY_SOURCE_RADIUS + 1);
+  imageBuckets = Array.from({ length: classCount }, () => []);
+  for (let idx = 0; idx < images.length; idx++) {
+    imageBuckets[idx % classCount].push(idx);
+  }
 }
 
 // ----- Input -----
 function applyHeldKeys() {
+  if (AUTO_CAMERA) return;
   const panSpeed = tileSize / PAN_SPEED_DIVISOR;
   if (keyIsDown(LEFT_ARROW)) camX -= panSpeed;
   if (keyIsDown(RIGHT_ARROW)) camX += panSpeed;
@@ -120,6 +158,7 @@ function applyHeldKeys() {
 }
 
 function keyPressed() {
+  if (AUTO_CAMERA) return;
   if (key === "f" || key === "F") {
     fullscreen(!fullscreen());
   } else if (key === "r" || key === "R") {
@@ -129,6 +168,93 @@ function keyPressed() {
     camY = 0;
     zoom = MIN_ZOOM;
   }
+}
+
+function easeInOutCubic(t) {
+  if (t < 0.5) return 4 * t * t * t;
+  return 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function smootherstep(t) {
+  return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+function tileCenter(i, j) {
+  return {
+    x: i * tileSize + tileSize * 0.5,
+    y: j * tileSize + tileSize * 0.5,
+  };
+}
+
+function initAutoCamera() {
+  currentTileI = 0;
+  currentTileJ = 0;
+  const c = tileCenter(currentTileI, currentTileJ);
+  camX = c.x;
+  camY = c.y;
+  zoom = START_TILE_ZOOM;
+  autoCameraReady = true;
+  startNextArc();
+}
+
+function pickTargetTile() {
+  let di = 0;
+  let dj = 0;
+  while (di === 0 && dj === 0) {
+    di = Math.floor(random(-MAX_TARGET_TILE_DISTANCE, MAX_TARGET_TILE_DISTANCE + 1));
+    dj = Math.floor(random(-MAX_TARGET_TILE_DISTANCE, MAX_TARGET_TILE_DISTANCE + 1));
+    if (Math.max(Math.abs(di), Math.abs(dj)) > MAX_TARGET_TILE_DISTANCE) {
+      di = 0;
+      dj = 0;
+    }
+  }
+  return {
+    i: currentTileI + di,
+    j: currentTileJ + dj,
+  };
+}
+
+function startNextArc() {
+  const target = pickTargetTile();
+  const start = tileCenter(currentTileI, currentTileJ);
+  const end = tileCenter(target.i, target.j);
+
+  moveStartX = start.x;
+  moveStartY = start.y;
+  moveEndX = end.x;
+  moveEndY = end.y;
+  moveFrame = 0;
+  moveDuration = ARC_DURATION_FRAMES;
+  currentTileI = target.i;
+  currentTileJ = target.j;
+}
+
+function updateAutoCamera() {
+  if (!AUTO_CAMERA || !autoCameraReady) return;
+
+  const t = constrain(moveFrame / moveDuration, 0, 1);
+  if (t < 0.52) {
+    const zt = easeInOutCubic(t / 0.52);
+    zoom = lerp(START_TILE_ZOOM, MID_ARC_ZOOM, zt);
+  } else {
+    const zt = easeInOutCubic((t - 0.52) / 0.48);
+    const softened = Math.pow(zt, ZOOM_IN_SOFT_START_POWER);
+    zoom = lerp(MID_ARC_ZOOM, TARGET_TILE_ZOOM, softened);
+  }
+
+  // Horizontal travel only occurs while zoom is in the lower range.
+  const horizontalPhase = constrain(
+    (t - HORIZONTAL_MOVE_START_T) /
+      (HORIZONTAL_MOVE_END_T - HORIZONTAL_MOVE_START_T),
+    0,
+    1
+  );
+  const pathProg = easeInOutCubic(horizontalPhase);
+  camX = lerp(moveStartX, moveEndX, pathProg);
+  camY = lerp(moveStartY, moveEndY, pathProg);
+
+  moveFrame++;
+  if (moveFrame > moveDuration) startNextArc();
 }
 
 // ----- Deterministic tile lookup -----
@@ -147,7 +273,10 @@ function tileFor(i, j) {
   const h1 = hash32(i, j, seed);
   const h2 = hash32(i + 17, j - 31, (seed ^ 0xdeadbeef) | 0);
   const h3 = hash32(i - 9, j + 53, (seed ^ 0x12345678) | 0);
-  const imageIdx = h1 % images.length;
+  const classSize = NEARBY_SOURCE_RADIUS + 1;
+  const classId = posMod(i, classSize) + classSize * posMod(j, classSize);
+  const bucket = imageBuckets[classId];
+  const imageIdx = (bucket && bucket.length ? bucket[h1 % bucket.length] : h1 % images.length);
   const meta = images[imageIdx];
   const cropX = Math.floor(rand01(h2) * (meta.width - tileSize + 1));
   const cropY = Math.floor(rand01(h3) * (meta.height - tileSize + 1));
@@ -264,8 +393,16 @@ function drawTile(i, j) {
   const sy = cropY * syScale;
   const sw = tileSize * sxScale;
   const sh = tileSize * syScale;
+  const rotSteps = 1 + (hash32(i + 101, j - 47, (seed ^ 0x7f4a7c15) | 0) % 3);
+  const centerX = screenX + screenSize * 0.5;
+  const centerY = screenY + screenSize * 0.5;
 
-  image(src, screenX, screenY, screenSize, screenSize, sx, sy, sw, sh);
+  push();
+  translate(centerX, centerY);
+  rotate(rotSteps * HALF_PI);
+  imageMode(CENTER);
+  image(src, 0, 0, screenSize, screenSize, sx, sy, sw, sh);
+  pop();
 }
 
 // ----- Main loop -----
@@ -274,6 +411,7 @@ function draw() {
   if (!manifestLoaded) return;
 
   applyHeldKeys();
+  updateAutoCamera();
 
   const halfW = width / (2 * zoom);
   const halfH = height / (2 * zoom);
@@ -297,14 +435,20 @@ function drawHud() {
     fpsValue = frameRate();
     lastFpsSample = frameCount;
   }
+  const targetInfo = tileFor(currentTileI, currentTileJ);
+  const targetMeta = images[targetInfo.imageIdx];
+  const targetFile = targetMeta?.file ? targetMeta.file.split("/").pop() : "n/a";
   const lines = [
     `seed   ${seed >>> 0}`,
     `zoom   ${zoom.toFixed(3)}    (1.000 = native 1:1)`,
     `cam    ${camX | 0}, ${camY | 0}`,
     `tile   ${tileSize}px world`,
+    `target ${currentTileI}, ${currentTileJ}   ${targetFile}`,
     `fps    ${fpsValue.toFixed(0)}`,
     `cache  full ${fulls.size}/${FULL_LRU_CAP}   med ${mediums.size}   loading ${loading.size}`,
-    `keys   arrows pan   q/a zoom   f fullscreen   r reseed   0 reset`,
+    AUTO_CAMERA
+      ? `cam    auto arc pan + eased zoom`
+      : `keys   arrows pan   q/a zoom   f fullscreen   r reseed   0 reset`,
   ];
   push();
   noStroke();
