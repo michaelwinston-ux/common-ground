@@ -62,3 +62,24 @@ tiles fit on the screen.
 - **Render loop.** Each frame computes the visible tile range from the camera
   and zoom, picks the best loaded resolution tier per tile, and blits the
   appropriate sub-rectangle via p5's 9-argument `image()` call.
+
+## Git basics
+
+Pull latest changes:
+
+```bash
+git pull origin main
+```
+
+Commit your work:
+
+```bash
+git add .
+git commit -m "Describe your change"
+```
+
+Push your commit:
+
+```bash
+git push origin main
+```
