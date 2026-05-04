@@ -66,6 +66,7 @@ const FULL_LRU_CAP = 24;
 const MEDIUM_CAP = 80;
 
 // ----- HUD -----
+let debugOverlayVisible = false;
 let lastFpsSample = 0;
 let fpsValue = 0;
 const NEARBY_SOURCE_RADIUS = 2;
@@ -158,10 +159,16 @@ function applyHeldKeys() {
 }
 
 function keyPressed() {
-  if (AUTO_CAMERA) return;
+  if (key === "d" || key === "D") {
+    debugOverlayVisible = !debugOverlayVisible;
+    return;
+  }
   if (key === "f" || key === "F") {
     fullscreen(!fullscreen());
-  } else if (key === "r" || key === "R") {
+    return;
+  }
+  if (AUTO_CAMERA) return;
+  if (key === "r" || key === "R") {
     seed = (Math.random() * 0xffffffff) >>> 0;
   } else if (key === "0") {
     camX = 0;
@@ -431,6 +438,7 @@ function draw() {
 
 // ----- HUD -----
 function drawHud() {
+  if (!debugOverlayVisible) return;
   if (frameCount - lastFpsSample > 15) {
     fpsValue = frameRate();
     lastFpsSample = frameCount;
@@ -447,8 +455,8 @@ function drawHud() {
     `fps    ${fpsValue.toFixed(0)}`,
     `cache  full ${fulls.size}/${FULL_LRU_CAP}   med ${mediums.size}   loading ${loading.size}`,
     AUTO_CAMERA
-      ? `cam    auto arc pan + eased zoom`
-      : `keys   arrows pan   q/a zoom   f fullscreen   r reseed   0 reset`,
+      ? `cam    auto arc pan + eased zoom   F fullscreen   d debug hud`
+      : `keys   arrows pan   q/a zoom   F fullscreen   r reseed   0 reset   d debug hud`,
   ];
   push();
   noStroke();
